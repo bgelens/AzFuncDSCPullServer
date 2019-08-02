@@ -13,6 +13,18 @@ $table = (Get-AzStorageTable -Name $env:registrationTableName -Context $stContex
 
 $existingNode = Get-DscRegistration -Table $table -AgentId $agentId
 
+$certInfo = $Request.Body.RegistrationInformation.CertificateInformation
+$certObject = [DscNodeCertificateInformation]@{
+  FriendlyName = $certInfo.FriendlyName
+  Issuer = $certInfo.Issuer
+  NotAfter = $certInfo.NotAfter
+  NotBefore = $certInfo.NotBefore
+  Subject = $certInfo.Subject
+  PublicKey = $certInfo.PublicKey
+  Thumbprint = $certInfo.Thumbprint
+  Version = $certInfo.Version
+}
+
 if ($null -eq $existingNode) {
   # ReportServer registration does not contain ConfigurationNames
   $configNames = if ($Request.Body.RegistrationInformation.RegistrationMessageType -eq 'ConfigurationRepository') {
@@ -26,7 +38,8 @@ if ($null -eq $existingNode) {
     ($Request.Body.AgentInformation.IPAddress -split ';' -split ',' | Where-Object -FilterScript { $_ -ne [string]::Empty }),
     $Request.Body.AgentInformation.LCMVersion,
     $Request.Body.AgentInformation.NodeName,
-    $configNames
+    $configNames,
+    $certObject
   )
 
   Update-DscRegistration -Table $table -DscNodeRegistration $newNode

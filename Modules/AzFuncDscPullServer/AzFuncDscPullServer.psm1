@@ -4,26 +4,35 @@
 using module Az.Storage
 using namespace Microsoft.Azure.Cosmos.Table
 
+class DscNodeCertificateInformation {
+  [string] $FriendlyName
+  [string] $Issuer
+  [System.DateTimeOffset] $NotAfter
+  [System.DateTimeOffset] $NotBefore
+  [string] $Subject
+  [string] $PublicKey
+  [string] $Thumbprint
+  [UInt16] $Version
+
+  [string] ToString () {
+    return $this.PublicKey
+  }
+}
+
 class DscNodeRegistration {
   hidden [string] $PartitionKey
-
   hidden [string] $RowKey
-
   [System.DateTimeOffset] $Timestamp
-
   hidden [string] $ETag
-
   [Guid] $AgentId
-
   [string] $LCMVersion
-
   [string] $NodeName
-
   [IPAddress[]] $IPAddress
-
   [string[]] $ConfigurationNames
+  [System.DateTimeOffset] $CreationTime
+  [DscNodeCertificateInformation] $CertificateInformation
 
-  DscNodeRegistration ([guid] $agentId, [IPAddress[]] $ipAddress, [string] $lcmVersion, [string] $nodeName, [string[]] $configurationNames) {
+  DscNodeRegistration ([guid] $agentId, [IPAddress[]] $ipAddress, [string] $lcmVersion, [string] $nodeName, [string[]] $configurationNames, [DscNodeCertificateInformation] $certificateInformation) {
     $this.RowKey = $agentId
     $this.PartitionKey = 'dscregistration'
     $this.AgentId = $agentId
@@ -31,6 +40,8 @@ class DscNodeRegistration {
     $this.LCMVersion = $lcmVersion
     $this.NodeName = $nodeName
     $this.ConfigurationNames = $configurationNames
+    $this.CertificateInformation = $certificateInformation
+    $this.CreationTime = [System.DateTimeOffset]::UtcNow
   }
 
   DscNodeRegistration ([DynamicTableEntity]$Entity) {
@@ -49,6 +60,11 @@ class DscNodeRegistration {
       }
     $this.ConfigurationNames = $Entity.Properties['ConfigurationNames'].StringValue |
       ConvertFrom-Json
+
+    $this.CreationTime = $Entity.Properties['CreationTime'].DateTimeOffsetValue
+
+    $certInfo = $Entity.Properties['CertificateInformation'].StringValue | ConvertFrom-Json -AsHashtable
+    $this.CertificateInformation = [DscNodeCertificateInformation]$certInfo
   }
 
   [DynamicTableEntity] UpdateEntity() {
@@ -77,6 +93,17 @@ class DscNodeRegistration {
         $configurationsString
       )
     )
+
+    $update.Properties.Add('CertificateInformation', [EntityProperty]::GeneratePropertyForString(
+        ($this.CertificateInformation | ConvertTo-Json)
+      )
+    )
+
+    $update.Properties.Add('CreationTime', [EntityProperty]::GeneratePropertyForDateTimeOffset(
+        $this.CreationTime
+      )
+    )
+
     return $update
   }
 
@@ -146,9 +173,37 @@ function Update-DscRegistration {
       $operation = [TableOperation]::InsertOrMerge($DscNodeRegistration.UpdateEntity())
     }
     if ($PSCmdlet.ShouldProcess($operation.Entity.RowKey)) {
-      $Table.Execute(
+      $result = $Table.Execute(
         $operation
       )
+
+      if ($result.HttpStatusCode -ne '204') {
+        Write-Error -Message "Failed Table Operation for $($DscNodeRegistration.AgentId). StatusCode: $($result.HttpStatusCode)" -ErrorAction Continue
+      }
+    }
+  }
+}
+
+function Remove-DscRegistration {
+  [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'High')]
+  param (
+    [Parameter(Mandatory)]
+    [CloudTable] $Table,
+
+    [Parameter(Mandatory, ValueFromPipeline)]
+    [DscNodeRegistration] $DscNodeRegistration
+  )
+
+  process {
+    $operation = [TableOperation]::Delete($DscNodeRegistration.GetEntity())
+    if ($PSCmdlet.ShouldProcess($operation.Entity.RowKey)) {
+      $result = $Table.Execute(
+        $operation
+      )
+
+      if ($result.HttpStatusCode -ne '204') {
+        Write-Error -Message "Failed Table Operation for $($DscNodeRegistration.AgentId). StatusCode: $($result.HttpStatusCode)" -ErrorAction Continue
+      }
     }
   }
 }
